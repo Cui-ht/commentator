@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Annotate - Design Review Tool</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    * { box-sizing: border-box; }
+    html, body, #app { height: 100%; margin: 0; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <script type="module">
+    import { createElement as h, useState, useEffect, useRef } from 'https://esm.sh/react@18';
+    import { createRoot } from 'https://esm.sh/react-dom@18/client';
+
+    function App() {
+      const [url, setUrl] = useState('');
+      const [loadedUrl, setLoadedUrl] = useState('');
+      const [comments, setComments] = useState([]);
+      const [isAddingComment, setIsAddingComment] = useState(false);
+      const [pendingPosition, setPendingPosition] = useState(null);
+      const [newComment, setNewComment] = useState('');
+      const [selectedComment, setSelectedComment] = useState(null);
+      const [iframeStatus, setIframeStatus] = useState('idle');
+      const [annotateMode, setAnnotateMode] = useState(true);
+      const containerRef = useRef(null);
+
+      // Load comments from localStorage
+      useEffect(() => {
+        const saved = localStorage.getItem('annotate-comments');
+        if (saved) setComments(JSON.parse(saved));
+      }, []);
+
+      // Save comments
+      useEffect(() => {
+        localStorage.setItem('annotate-comments', JSON.stringify(comments));
+      }, [comments]);
+
+      const handleLoadUrl = () => {
+        if (url.trim()) {
+          let finalUrl = url.trim();
+          if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
+            finalUrl = 'https://' + finalUrl;
+          }
+          setLoadedUrl(finalUrl);
+          setIframeStatus('loading');
+          setSelectedComment(null);
+          setIsAddingComment(false);
+        }
+      };
+
+      const handleOverlayClick = (e) => {
+        if (!annotateMode) return;
+        
+        if (selectedComment !== null) {
+          setSelectedComment(null);
+          return;
+        }
+
+        if (isAddingComment) {
+          setIsAddingComment(false);
+          setPendingPosition(null);
+          setNewComment('');
+          return;
+        }
+
+        const rect = containerRef.current.getBoundingClientRect();
+        const x = ((e.clientX - rect.left) / rect.width) * 100;
+        const y = ((e.clientY - rect.top) / rect.height) * 100;
+
+        setPendingPosition({ x, y });
+        setIsAddingComment(true);
+      };
+
+      const handleAddComment = () => {
+        if (newComment.trim() && pendingPosition) {
+          const comment = {
+            id: Date.now(),
+            x: pendingPosition.x,
+            y: pendingPosition.y,
+            text: newComment.trim(),
+            url: loadedUrl,
+            createdAt: new Date().toISOString(),
+            resolved: false
+          };
+          setComments([...comments, comment]);
+          setNewComment('');
+          setPendingPosition(null);
+          setIsAddingComment(false);
+        }
+      };
+
+      const handleDeleteComment = (id) => {
+        setComments(comments.filter(c => c.id !== id));
+        setSelectedComment(null);
+      };
+
+      const handleResolveComment = (id) => {
+        setComments(comments.map(c => 
+          c.id === id ? { ...c, resolved: !c.resolved } : c
+        ));
+      };
+
+      const currentComments = comments.filter(c => c.url === loadedUrl);
+      const unresolvedCount = currentComments.filter(c => !c.resolved).length;
+
+      // Header
+      const header = h('div', { className: 'bg-white border-b px-4 py-3 flex items-center gap-3 flex-shrink-0' },
+        h('h1', { className: 'text-lg font-bold text-blue-600' }, '📌 Annotate'),
+        h('div', { className: 'flex-1 flex gap-2' },
+          h('input', {
+            type: 'text',
+            value: url,
+            onChange: (e) => setUrl(e.target.value),
+            onKeyDown: (e) => e.key === 'Enter' && handleLoadUrl(),
+            placeholder: 'Enter URL (e.g., your-site.netlify.app)',
+            className: 'flex-1 px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500'
+          }),
+          h('button', {
+            onClick: handleLoadUrl,
+            className: 'px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors'
+          }, 'Load')
+        ),
+        loadedUrl && h('div', { className: 'flex items-center gap-3' },
+          h('div', { className: 'flex bg-gray-100 rounded-lg p-1' },
+            h('button', {
+              onClick: () => setAnnotateMode(false),
+              className: `px-3 py-1 text-sm rounded-md transition-colors ${!annotateMode ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`
+            }, 'Browse'),
+            h('button', {
+              onClick: () => setAnnotateMode(true),
+              className: `px-3 py-1 text-sm rounded-md transition-colors ${annotateMode ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`
+            }, 'Annotate')
+          ),
+          h('div', { className: 'text-sm text-gray-500 tabular-nums' }, `${unresolvedCount} open`)
+        )
+      );
+
+      // Empty state
+      const emptyState = h('div', { className: 'absolute inset-0 flex items-center justify-center' },
+        h('div', { className: 'text-center text-gray-400' },
+          h('div', { className: 'text-6xl mb-4' }, '🔗'),
+          h('p', { className: 'text-xl mb-2' }, 'Enter a URL to start'),
+          h('p', { className: 'text-sm' }, 'Works with Netlify, Vercel, or any embeddable page')
+        )
+      );
+
+      // Loading state
+      const loadingState = h('div', { className: 'absolute inset-0 flex items-center justify-center bg-gray-50 z-10' },
+        h('div', { className: 'text-center' },
+          h('div', { className: 'w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-3' }),
+          h('p', { className: 'text-gray-500' }, 'Loading page...')
+        )
+      );
+
+      // Comment pins
+      const commentPins = currentComments.map((comment, index) => 
+        h('div', {
+          key: comment.id,
+          className: `absolute transform -translate-x-1/2 -translate-y-1/2 z-20 transition-opacity ${comment.resolved ? 'opacity-50' : ''}`,
+          style: { left: `${comment.x}%`, top: `${comment.y}%`, pointerEvents: 'auto' }
+        },
+          h('button', {
+            onClick: (e) => {
+              e.stopPropagation();
+              setSelectedComment(selectedComment === comment.id ? null : comment.id);
+            },
+            className: `w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-lg hover:scale-110 transition-transform ${comment.resolved ? 'bg-green-500' : 'bg-red-500'}`
+          }, index + 1),
+          selectedComment === comment.id && h('div', {
+            className: 'absolute top-9 left-1/2 -translate-x-1/2 bg-white rounded-lg shadow-2xl border p-4 w-72 z-30',
+            onClick: (e) => e.stopPropagation()
+          },
+            h('p', { className: 'text-sm text-gray-800 mb-3 whitespace-pre-wrap' }, comment.text),
+            h('p', { className: 'text-xs text-gray-400 mb-3' }, new Date(comment.createdAt).toLocaleString()),
+            h('div', { className: 'flex gap-2' },
+              h('button', {
+                onClick: () => handleResolveComment(comment.id),
+                className: `flex-1 text-sm px-3 py-1.5 rounded-md font-medium transition-colors ${comment.resolved ? 'bg-gray-100 text-gray-700 hover:bg-gray-200' : 'bg-green-50 text-green-700 hover:bg-green-100'}`
+              }, comment.resolved ? 'Reopen' : 'Resolve'),
+              h('button', {
+                onClick: () => handleDeleteComment(comment.id),
+                className: 'text-sm px-3 py-1.5 rounded-md bg-red-50 text-red-700 hover:bg-red-100 font-medium transition-colors'
+              }, 'Delete')
+            )
+          )
+        )
+      );
+
+      // New comment input
+      const newCommentInput = isAddingComment && pendingPosition && h('div', {
+        className: 'absolute z-30',
+        style: { left: `${pendingPosition.x}%`, top: `${pendingPosition.y}%`, transform: 'translate(-50%, 0)' },
+        onClick: (e) => e.stopPropagation()
+      },
+        h('div', { className: 'w-4 h-4 bg-blue-500 rounded-full mx-auto shadow-lg' }),
+        h('div', { className: 'mt-2 bg-white rounded-lg shadow-2xl border p-3 w-72' },
+          h('textarea', {
+            autoFocus: true,
+            value: newComment,
+            onChange: (e) => setNewComment(e.target.value),
+            placeholder: 'Add your feedback...',
+            className: 'w-full text-sm border rounded-md p-2 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500',
+            rows: 3,
+            onKeyDown: (e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleAddComment();
+              }
+              if (e.key === 'Escape') {
+                setIsAddingComment(false);
+                setPendingPosition(null);
+                setNewComment('');
+              }
+            }
+          }),
+          h('div', { className: 'flex justify-between items-center mt-2' },
+            h('span', { className: 'text-xs text-gray-400' }, 'Enter to submit'),
+            h('div', { className: 'flex gap-2' },
+              h('button', {
+                onClick: () => { setIsAddingComment(false); setPendingPosition(null); setNewComment(''); },
+                className: 'text-sm px-3 py-1.5 rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }, 'Cancel'),
+              h('button', {
+                onClick: handleAddComment,
+                disabled: !newComment.trim(),
+                className: 'text-sm px-3 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50'
+              }, 'Add')
+            )
+          )
+        )
+      );
+
+      // Viewport
+      const viewport = h('div', { className: 'flex-1 relative bg-white', ref: containerRef },
+        !loadedUrl ? emptyState : [
+          iframeStatus === 'loading' && loadingState,
+          h('iframe', {
+            key: 'iframe',
+            src: loadedUrl,
+            className: 'absolute inset-0 w-full h-full border-0',
+            onLoad: () => setIframeStatus('loaded'),
+            onError: () => setIframeStatus('error')
+          }),
+          annotateMode && iframeStatus === 'loaded' && h('div', {
+            key: 'overlay',
+            className: 'absolute inset-0 cursor-crosshair',
+            onClick: handleOverlayClick,
+            style: { background: 'rgba(59, 130, 246, 0.02)' }
+          }),
+          ...commentPins,
+          newCommentInput
+        ]
+      );
+
+      // Sidebar
+      const sidebar = loadedUrl && h('div', { className: 'w-80 bg-white border-l flex flex-col flex-shrink-0' },
+        h('div', { className: 'p-4 border-b' },
+          h('h2', { className: 'font-semibold text-gray-800' }, `Comments ${currentComments.length > 0 ? `(${currentComments.length})` : ''}`),
+          h('p', { className: 'text-xs text-gray-400 mt-1 truncate', title: loadedUrl }, loadedUrl)
+        ),
+        h('div', { className: 'flex-1 overflow-y-auto' },
+          currentComments.length === 0
+            ? h('div', { className: 'p-4 text-center text-gray-400' },
+                h('p', { className: 'text-sm' }, 'No comments yet'),
+                h('p', { className: 'text-xs mt-1' }, 'Click on the page to add feedback')
+              )
+            : h('div', { className: 'divide-y' },
+                ...currentComments.map((comment, index) =>
+                  h('div', {
+                    key: comment.id,
+                    onClick: () => setSelectedComment(comment.id),
+                    className: `p-4 cursor-pointer transition-colors ${comment.resolved ? 'bg-gray-50' : 'hover:bg-gray-50'} ${selectedComment === comment.id ? 'bg-blue-50' : ''}`
+                  },
+                    h('div', { className: 'flex items-start gap-3' },
+                      h('div', {
+                        className: `w-6 h-6 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0 ${comment.resolved ? 'bg-green-500' : 'bg-red-500'}`
+                      }, index + 1),
+                      h('div', { className: 'flex-1 min-w-0' },
+                        h('p', { className: `text-sm ${comment.resolved ? 'line-through text-gray-400' : 'text-gray-800'}` }, comment.text),
+                        h('p', { className: 'text-xs text-gray-400 mt-1' }, new Date(comment.createdAt).toLocaleString())
+                      )
+                    )
+                  )
+                )
+              )
+        ),
+        currentComments.length > 0 && h('div', { className: 'p-3 border-t bg-gray-50' },
+          h('button', {
+            onClick: () => {
+              const md = currentComments.map((c, i) => 
+                `${i + 1}. ${c.resolved ? '~~' : ''}${c.text}${c.resolved ? '~~' : ''}`
+              ).join('\n');
+              navigator.clipboard.writeText(md);
+              alert('Copied!');
+            },
+            className: 'w-full text-sm px-3 py-2 rounded-md bg-gray-200 text-gray-700 hover:bg-gray-300'
+          }, 'Copy as Markdown')
+        )
+      );
+
+      return h('div', { className: 'h-full flex flex-col bg-gray-100' },
+        header,
+        h('div', { className: 'flex-1 flex min-h-0' }, viewport, sidebar)
+      );
+    }
+
+    createRoot(document.getElementById('app')).render(h(App));
+  </script>
+</body>
+</html>
